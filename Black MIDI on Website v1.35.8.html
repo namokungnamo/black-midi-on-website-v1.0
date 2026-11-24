@@ -1,0 +1,2104 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Black MIDI Visualizer — WebGL2 & Wall-Clock Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        limepro: '#a3e635',
+                        obsidian: '#030406',
+                    }
+                }
+            }
+        };
+    </script>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #030406;
+            color: #e4e4e7;
+            font-family: 'Inter', sans-serif;
+        }
+        #gl-canvas, #piano-canvas {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            display: block;
+            touch-action: none;
+        }
+        #gl-canvas {
+            top: 0;
+            z-index: 1;
+        }
+        #piano-canvas {
+            bottom: 0;
+            z-index: 2;
+            border-top: none;
+        }
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            height: 4px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.14);
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 13px;
+            width: 13px;
+            border-radius: 50%;
+            background: #a3e635;
+            cursor: pointer;
+            margin-top: -4.5px;
+            box-shadow: 0 0 8px rgba(163, 230, 53, 0.85);
+            transition: transform 0.1s ease;
+        }
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.22);
+        }
+        .pro-panel {
+            background: rgba(8, 10, 14, 0.84);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.75);
+        }
+        .track-list-scroll::-webkit-scrollbar {
+            width: 5px;
+        }
+        .track-list-scroll::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.03);
+        }
+        .track-list-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.18);
+            border-radius: 999px;
+        }
+    </style>
+</head>
+<body class="relative w-screen h-screen overflow-hidden bg-[#030406]">
+
+    <!-- Layer 1: WebGL2 Hardware-Accelerated Note Waterfall -->
+    <canvas id="gl-canvas"></canvas>
+
+    <!-- Layer 2: Interactive 128-Key Piano Keyboard -->
+    <canvas id="piano-canvas"></canvas>
+
+    <!-- Empty State / Drop Prompt when no MIDI file is loaded yet -->
+    <div id="empty-state" class="fixed inset-0 z-10 pointer-events-none flex items-center justify-center px-4 pb-24">
+        <div class="pointer-events-auto pro-panel rounded-2xl p-6 sm:p-8 max-w-md w-full text-center border border-[#a3e635]/30">
+            <div class="w-12 h-12 mx-auto mb-3 rounded-xl bg-[#a3e635]/15 border border-[#a3e635]/40 flex items-center justify-center text-[#a3e635]">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+                </svg>
+            </div>
+            <h1 class="text-lg font-bold text-white mb-1">Import MIDI File (.mid / .midi)</h1>
+            <p class="text-xs text-zinc-400 mb-4 leading-relaxed">
+                Drop a MIDI file anywhere on screen or click below to load and play with a 128-key piano note waterfall.
+            </p>
+            <div class="flex flex-wrap items-center justify-center gap-2">
+                <label for="midi-file-input" class="cursor-pointer inline-flex items-center justify-center gap-2 bg-[#a3e635] hover:bg-[#bef264] text-black font-bold text-xs px-4 py-2.5 rounded-xl transition active:scale-95 shadow-[0_0_16px_rgba(163,230,53,0.35)]">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                    </svg>
+                    <span>Upload MIDI</span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Drag & Drop Overlay -->
+    <div id="drop-overlay" class="fixed inset-0 z-50 hidden flex-col items-center justify-center bg-[#030406]/90 backdrop-blur-md border-2 border-dashed border-[#a3e635]">
+        <div class="pro-panel p-8 rounded-2xl text-center max-w-md mx-4 border border-[#a3e635]/40">
+            <div class="w-14 h-14 mx-auto mb-4 rounded-xl bg-[#a3e635]/15 border border-[#a3e635]/40 flex items-center justify-center text-[#a3e635]">
+                <svg class="w-8 h-8 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                </svg>
+            </div>
+            <h2 class="text-xl font-bold text-white mb-1">Drop MIDI (.mid / .midi) Here</h2>
+            <p class="text-xs text-zinc-400">Parsed in Web Worker and rendered on WebGL2 GPU immediately</p>
+        </div>
+    </div>
+
+    <!-- Parsing & Uploading Modal -->
+    <div id="loading-overlay" class="fixed inset-0 z-40 hidden items-center justify-center bg-[#030406]/85 backdrop-blur-md">
+        <div class="pro-panel p-6 sm:p-7 rounded-2xl max-w-md w-full mx-4 text-center border border-[#a3e635]/30">
+            <div class="relative w-12 h-12 mx-auto mb-4">
+                <div class="absolute inset-0 rounded-full border-2 border-zinc-800"></div>
+                <div class="absolute inset-0 rounded-full border-2 border-t-[#a3e635] animate-spin"></div>
+            </div>
+            <h3 id="loading-title" class="text-lg font-bold text-white mb-1">Parsing MIDI File...</h3>
+            <p id="loading-subtitle" class="text-xs text-[#a3e635] font-mono mb-4">Building Global Tempo Map...</p>
+            <div class="w-full bg-zinc-900 rounded-full h-2 overflow-hidden mb-2 border border-white/5">
+                <div id="loading-bar" class="bg-[#a3e635] h-2 rounded-full transition-all duration-100" style="width: 10%;"></div>
+            </div>
+            <p id="loading-stats" class="text-[11px] text-zinc-400 font-mono">0 notes</p>
+        </div>
+    </div>
+
+    <!-- Top-Left Minimal White Telemetry Stack -->
+    <div id="hud-panel" class="fixed top-3 left-3 z-20 pointer-events-none font-mono leading-[1.35] text-white" style="font-size: 15px;">
+        <div>Note: <span id="hud-note">0/0</span></div>
+        <div>FPS: <span id="hud-fps">60</span></div>
+        <div>BPM: <span id="hud-bpm">120.00</span></div>
+        <div>NPS: <span id="hud-nps">0</span></div>
+        <div>Render: <span id="hud-render">0</span></div>
+        <div>Polyphony: <span id="hud-polyphony">0</span></div>
+    </div>
+
+    <!-- Top-Center Compact Transport & Progress Strip -->
+    <div id="playback-bar" class="fixed top-2.5 left-1/2 -translate-x-1/2 z-20 pro-panel rounded-xl px-2.5 py-1.5 w-[92%] max-w-xl">
+        <div class="flex items-center gap-2">
+            <button id="play-pause-btn" disabled title="Play / Pause" class="disabled:opacity-40 disabled:cursor-not-allowed w-6 h-6 flex items-center justify-center rounded-md bg-[#a3e635] hover:bg-[#bef264] text-black transition active:scale-95 shrink-0">
+                <svg id="icon-play" class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <svg id="icon-pause" class="w-3 h-3 hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+
+            <button id="restart-btn" disabled title="Restart from 00:00.000" class="disabled:opacity-40 disabled:cursor-not-allowed w-6 h-6 flex items-center justify-center rounded-md bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-white/10 transition active:scale-95 shrink-0">
+                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="5" y1="5" x2="5" y2="19"></line>
+                    <polygon points="19 5 9 12 19 19 19 5" fill="currentColor" stroke="none"></polygon>
+                </svg>
+            </button>
+
+            <div class="relative flex-1 h-3 flex items-center cursor-pointer" id="seek-container">
+                <canvas id="density-canvas" class="w-full h-2 rounded bg-zinc-950 border border-white/10 overflow-hidden"></canvas>
+                <div id="seek-progress" class="absolute left-0 top-1/2 -translate-y-1/2 h-2 bg-[#a3e635]/30 border-r border-[#a3e635] pointer-events-none" style="width: 0%;"></div>
+                <div id="seek-thumb" class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-[#a3e635] shadow-[0_0_8px_#a3e635] pointer-events-none" style="left: 0%;"></div>
+            </div>
+
+            <span id="time-compact" class="font-mono text-[10px] text-zinc-200 shrink-0 tabular-nums">00:00.000 / 00:00.000</span>
+        </div>
+    </div>
+
+    <!-- Top-Right Controls -->
+    <div id="top-controls" class="fixed top-3 right-3 z-20 flex flex-col items-end gap-2">
+        <div class="pro-panel rounded-xl p-1.5 flex items-center gap-1.5">
+            <label for="midi-file-input" class="cursor-pointer flex items-center gap-1.5 bg-[#a3e635] hover:bg-[#bef264] text-black font-bold text-xs px-3 py-2 rounded-lg shadow-[0_0_15px_rgba(163,230,53,0.35)] transition active:scale-95">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                </svg>
+                <span>Upload MIDI</span>
+            </label>
+            <input type="file" id="midi-file-input" accept=".mid,.midi,audio/midi,audio/x-midi" class="hidden">
+
+            <button id="track-toggle-btn" title="Tracks (♪)" class="w-8 h-8 flex items-center justify-center bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-white/10 rounded-lg">
+                <svg class="w-4 h-4 text-[#a3e635]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18V5l12-2v13"></path>
+                    <circle cx="6" cy="18" r="3" fill="currentColor"></circle>
+                    <circle cx="18" cy="16" r="3" fill="currentColor"></circle>
+                </svg>
+            </button>
+
+            <button id="settings-toggle-btn" title="Display & Audio Settings" class="w-8 h-8 flex items-center justify-center bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-white/10 rounded-lg">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+            </button>
+        </div>
+
+        <div class="relative flex items-start justify-end">
+            <!-- Instant Side Drawer for Tracks (No Animation) -->
+            <div id="track-panel" class="hidden mr-2 pro-panel rounded-xl p-3 w-72 sm:w-80 text-xs border border-white/15">
+                <div class="flex items-center justify-between border-b border-white/10 pb-2 mb-2">
+                    <span class="font-bold text-white">♪ Tracks (<span id="track-count-label">0</span>)</span>
+                    <button id="close-track-btn" class="text-zinc-400 hover:text-white text-base leading-none">&times;</button>
+                </div>
+                <div class="flex items-center justify-between gap-1.5 mb-2 text-[10px] font-mono">
+                    <div class="flex gap-1">
+                        <button id="tracks-show-all" class="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-white/10">Show All</button>
+                        <button id="tracks-hide-all" class="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-white/10">Hide All</button>
+                    </div>
+                    <div class="flex gap-1">
+                        <button id="tracks-unmute-all" class="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-white/10">Unmute All</button>
+                        <button id="tracks-mute-all" class="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-white/10">Mute All</button>
+                    </div>
+                </div>
+                <div id="track-list" class="track-list-scroll max-h-64 overflow-y-auto space-y-1 pr-0.5">
+                    <div class="text-zinc-500 text-center py-4 font-mono text-[11px]">No MIDI loaded</div>
+                </div>
+            </div>
+
+            <!-- Display & Audio Settings Panel -->
+            <div id="settings-panel" class="hidden pro-panel rounded-xl p-3.5 w-72 sm:w-80 space-y-2.5 text-xs border border-white/15">
+                <div class="flex items-center justify-between border-b border-white/10 pb-2">
+                    <span class="font-bold text-white">Display & Audio Settings</span>
+                    <button id="close-settings-btn" class="text-zinc-400 hover:text-white text-base leading-none">&times;</button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <span class="text-zinc-300">Audio Output</span>
+                    <button id="audio-toggle-btn" class="px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold bg-[#a3e635]/15 text-[#a3e635] border border-[#a3e635]/40">
+                        AUDIO ON
+                    </button>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <span class="text-zinc-300">Web Audio Wave</span>
+                    <select id="waveform-select" class="bg-zinc-900 border border-white/15 rounded-lg px-2 py-1 font-mono text-[11px] text-[#a3e635] focus:outline-none focus:border-[#a3e635]">
+                        <option value="triangle" selected>triangle</option>
+                        <option value="sine">sine</option>
+                        <option value="sawtooth">sawtooth</option>
+                        <option value="square">square</option>
+                    </select>
+                </div>
+
+                <div>
+                    <div class="flex justify-between mb-1">
+                        <span class="text-zinc-300">Note Fall Time (Seconds)</span>
+                        <span id="fallspeed-val" class="font-mono text-[#a3e635]">1.00s</span>
+                    </div>
+                    <input type="range" id="fallspeed-slider" min="0.25" max="6.0" step="0.05" value="1.0" class="w-full">
+                </div>
+
+                <div>
+                    <div class="flex justify-between mb-1">
+                        <span class="text-zinc-300">Playback Speed</span>
+                        <span id="playspeed-val" class="font-mono text-[#a3e635]">1.00x</span>
+                    </div>
+                    <input type="range" id="playspeed-slider" min="0.25" max="2.0" step="0.05" value="1.0" class="w-full">
+                </div>
+
+                <div>
+                    <div class="flex justify-between mb-1">
+                        <span class="text-zinc-300">Master Volume</span>
+                        <span id="volume-val" class="font-mono text-[#a3e635]">65%</span>
+                    </div>
+                    <input type="range" id="volume-slider" min="0" max="200" value="65" class="w-full">
+                </div>
+
+                <div>
+                    <div class="flex justify-between mb-1">
+                        <span class="text-zinc-300">Max Voices (Custom)</span>
+                        <span id="polyphony-val" class="font-mono text-[#a3e635]">1024</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input type="number" id="polyphony-input" min="1" max="2048" step="1" value="1024" class="w-full bg-zinc-900 border border-white/15 rounded-lg px-2.5 py-1 text-zinc-200 font-mono focus:outline-none focus:border-[#a3e635]">
+                        <button id="polyphony-apply-btn" class="px-2.5 py-1 rounded-lg bg-[#a3e635] hover:bg-[#bef264] text-black font-bold text-[11px] shrink-0 transition">
+                            SET
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between pt-0.5">
+                    <span class="text-zinc-300">HUD Text Size</span>
+                    <div class="flex items-center gap-1.5">
+                        <button id="hud-size-dec" class="w-6 h-6 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/10 font-mono font-bold text-zinc-200">-</button>
+                        <span id="hud-size-val" class="font-mono text-[#a3e635] w-10 text-center">15px</span>
+                        <button id="hud-size-inc" class="w-6 h-6 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/10 font-mono font-bold text-zinc-200">+</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Non-blocking Toast Message -->
+    <div id="toast-box" class="fixed top-14 left-1/2 -translate-x-1/2 z-50 pointer-events-none opacity-0 transition-all duration-200 transform -translate-y-2">
+        <div class="pro-panel px-4 py-2 rounded-xl border border-[#a3e635]/40 text-xs font-medium text-white shadow-2xl flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-[#a3e635]"></span>
+            <span id="toast-message">Notification</span>
+        </div>
+    </div>
+
+    <script>
+    const workerCode = `
+        function readVLQ(data, state) {
+            let value = 0;
+            let b = 0;
+            while (state.pos < data.length) {
+                b = data[state.pos++];
+                value = (value << 7) | (b & 0x7F);
+                if ((b & 0x80) === 0) break;
+            }
+            return value;
+        }
+
+        function parseMidiArrayBuffer(buffer) {
+            const data = new Uint8Array(buffer);
+            const view = new DataView(buffer);
+
+            if (data.length < 14) throw new Error('MIDI file is too short or incomplete.');
+            if (String.fromCharCode(data[0], data[1], data[2], data[3]) !== 'MThd') {
+                throw new Error('Missing MThd header in Standard MIDI file.');
+            }
+
+            const headerLen = view.getUint32(4, false);
+            const numTracks = view.getUint16(10, false);
+            const division = view.getUint16(12, false);
+
+            let ticksPerQuarter = 480;
+            let smpteFps = 0;
+            let ticksPerFrame = 0;
+            if (division & 0x8000) {
+                smpteFps = 256 - (division >> 8);
+                ticksPerFrame = division & 0xFF;
+            } else {
+                ticksPerQuarter = division || 480;
+            }
+
+            let pos = 8 + headerLen;
+
+            const tempoEvents = [{ tick: 0, usPerQuarter: 500000, seq: 0 }];
+            let tempoSeq = 1;
+            let maxEndTick = 0;
+
+            let capacity = 65536;
+            let noteCount = 0;
+            let rawStartTicks = new Uint32Array(capacity);
+            let rawEndTicks = new Uint32Array(capacity);
+            let rawMeta = new Uint32Array(capacity);
+
+            function growIfNeeded() {
+                if (noteCount >= capacity) {
+                    const nextCap = Math.floor(capacity * 1.55);
+                    const nStart = new Uint32Array(nextCap);
+                    const nEnd = new Uint32Array(nextCap);
+                    const nMeta = new Uint32Array(nextCap);
+                    nStart.set(rawStartTicks);
+                    nEnd.set(rawEndTicks);
+                    nMeta.set(rawMeta);
+                    rawStartTicks = nStart;
+                    rawEndTicks = nEnd;
+                    rawMeta = nMeta;
+                    capacity = nextCap;
+                }
+            }
+
+            const depth = new Uint8Array(16 * 128);
+            const startStack = new Int32Array(16 * 128 * 16).fill(-1);
+            const velStack = new Uint8Array(16 * 128 * 16);
+
+            let trackIdx = 0;
+            let trackNoteCounts = new Uint32Array(Math.max(1, numTracks));
+            let trackMainChannel = new Int16Array(Math.max(1, numTracks)).fill(-1);
+            let lastProgressAt = Date.now();
+
+            function recordNote(sTick, eTick, pitch, vel, ch, tIdx) {
+                growIfNeeded();
+                const trkClamped = Math.min(255, tIdx);
+                rawStartTicks[noteCount] = sTick;
+                rawEndTicks[noteCount] = Math.max(eTick, sTick + 1);
+                rawMeta[noteCount] = pitch | (vel << 8) | (ch << 16) | (trkClamped << 24);
+                if (tIdx >= trackNoteCounts.length) {
+                    const grownCounts = new Uint32Array(tIdx + 8);
+                    grownCounts.set(trackNoteCounts);
+                    trackNoteCounts = grownCounts;
+
+                    const grownCh = new Int16Array(tIdx + 8).fill(-1);
+                    grownCh.set(trackMainChannel);
+                    trackMainChannel = grownCh;
+                }
+                if (trackMainChannel[tIdx] === -1) {
+                    trackMainChannel[tIdx] = ch;
+                }
+                trackNoteCounts[tIdx]++;
+                noteCount++;
+            }
+
+            while (pos <= data.length - 8) {
+                const chunkId = String.fromCharCode(data[pos], data[pos + 1], data[pos + 2], data[pos + 3]);
+                const chunkLen = view.getUint32(pos + 4, false);
+                pos += 8;
+                const chunkEnd = Math.min(pos + chunkLen, data.length);
+
+                if (chunkId === 'MTrk') {
+                    depth.fill(0);
+                    let tick = 0;
+                    let runningStatus = 0;
+                    const reader = { pos: pos };
+
+                    while (reader.pos < chunkEnd) {
+                        const delta = readVLQ(data, reader);
+                        tick += delta;
+                        if (reader.pos >= chunkEnd) break;
+
+                        let status = data[reader.pos];
+                        if (status < 0x80) {
+                            status = runningStatus;
+                        } else {
+                            reader.pos++;
+                            if (status < 0xF0) runningStatus = status;
+                        }
+
+                        const cmd = status & 0xF0;
+                        const ch = status & 0x0F;
+
+                        if (cmd === 0x90) {
+                            const pitch = data[reader.pos++] & 0x7F;
+                            const vel = data[reader.pos++] & 0x7F;
+                            const key = (ch << 7) | pitch;
+
+                            if (vel > 0) {
+                                const d = depth[key];
+                                if (d < 16) {
+                                    const slot = (key << 4) | d;
+                                    startStack[slot] = tick;
+                                    velStack[slot] = vel;
+                                    depth[key] = d + 1;
+                                }
+                            } else {
+                                const d = depth[key];
+                                if (d > 0) {
+                                    const nd = d - 1;
+                                    depth[key] = nd;
+                                    const slot = (key << 4) | nd;
+                                    const sTick = startStack[slot];
+                                    if (sTick >= 0) {
+                                        recordNote(sTick, tick, pitch, velStack[slot], ch, trackIdx);
+                                    }
+                                }
+                            }
+                        } else if (cmd === 0x80) {
+                            const pitch = data[reader.pos++] & 0x7F;
+                            reader.pos++;
+                            const key = (ch << 7) | pitch;
+                            const d = depth[key];
+                            if (d > 0) {
+                                const nd = d - 1;
+                                depth[key] = nd;
+                                const slot = (key << 4) | nd;
+                                const sTick = startStack[slot];
+                                if (sTick >= 0) {
+                                    recordNote(sTick, tick, pitch, velStack[slot], ch, trackIdx);
+                                }
+                            }
+                        } else if (cmd === 0xA0 || cmd === 0xB0 || cmd === 0xE0) {
+                            reader.pos += 2;
+                        } else if (cmd === 0xC0 || cmd === 0xD0) {
+                            reader.pos += 1;
+                        } else if (status === 0xFF) {
+                            const metaType = data[reader.pos++];
+                            const metaLen = readVLQ(data, reader);
+                            if (metaType === 0x51 && metaLen === 3 && reader.pos + 3 <= chunkEnd) {
+                                const us = (data[reader.pos] << 16) | (data[reader.pos + 1] << 8) | data[reader.pos + 2];
+                                if (us > 0) {
+                                    tempoEvents.push({ tick: tick, usPerQuarter: us, seq: tempoSeq++ });
+                                }
+                            } else if (metaType === 0x2F) {
+                                if (tick > maxEndTick) maxEndTick = tick;
+                            }
+                            reader.pos += metaLen;
+                        } else if (status === 0xF0 || status === 0xF7) {
+                            const sysLen = readVLQ(data, reader);
+                            reader.pos += sysLen;
+                        }
+                    }
+
+                    if (tick > maxEndTick) maxEndTick = tick;
+
+                    for (let key = 0; key < 16 * 128; key++) {
+                        while (depth[key] > 0) {
+                            const nd = --depth[key];
+                            const slot = (key << 4) | nd;
+                            const sTick = startStack[slot];
+                            if (sTick >= 0) {
+                                const pitch = key & 0x7F;
+                                const ch = key >> 7;
+                                recordNote(sTick, tick, pitch, velStack[slot], ch, trackIdx);
+                            }
+                        }
+                    }
+
+                    trackIdx++;
+                    const nowMs = Date.now();
+                    if (nowMs - lastProgressAt > 85) {
+                        self.postMessage({
+                            type: 'progress',
+                            percent: Math.min(72, Math.round((pos / data.length) * 72)),
+                            notes: noteCount,
+                            stage: 'Reading track ' + trackIdx + '/' + Math.max(1, numTracks) + '...'
+                        });
+                        lastProgressAt = nowMs;
+                    }
+                }
+                pos = chunkEnd;
+            }
+
+            const finalTrackCount = Math.max(1, trackIdx);
+            const rawTrackCounts = trackNoteCounts.slice(0, finalTrackCount);
+            const rawTrackChannels = new Uint8Array(finalTrackCount);
+            for (let t = 0; t < finalTrackCount; t++) {
+                rawTrackChannels[t] = trackMainChannel[t] >= 0 ? trackMainChannel[t] : (t & 0x0F);
+            }
+
+            // Remap tracks so non-empty tracks start at Track 1 (e.g. 6,091 notes becomes Track 1)
+            const oldToNewTrk = new Uint8Array(finalTrackCount);
+            const activeIndices = [];
+            for (let t = 0; t < finalTrackCount; t++) {
+                if (rawTrackCounts[t] > 0) {
+                    activeIndices.push(t);
+                }
+            }
+            const sourceList = activeIndices.length > 0 ? activeIndices : [0];
+            for (let newIdx = 0; newIdx < sourceList.length; newIdx++) {
+                oldToNewTrk[sourceList[newIdx]] = Math.min(255, newIdx);
+            }
+            const trackCounts = new Uint32Array(sourceList.length);
+            const trackChannels = new Uint8Array(sourceList.length);
+            for (let newIdx = 0; newIdx < sourceList.length; newIdx++) {
+                const oldIdx = sourceList[newIdx];
+                trackCounts[newIdx] = rawTrackCounts[oldIdx];
+                trackChannels[newIdx] = rawTrackChannels[oldIdx];
+            }
+            for (let i = 0; i < noteCount; i++) {
+                const m = rawMeta[i];
+                const oldTrk = (m >>> 24) & 0xFF;
+                const mappedTrk = oldToNewTrk[Math.min(oldTrk, finalTrackCount - 1)] || 0;
+                rawMeta[i] = (m & 0x00FFFFFF) | (mappedTrk << 24);
+            }
+
+            self.postMessage({
+                type: 'progress',
+                percent: 78,
+                notes: noteCount,
+                stage: 'Building Global Tempo Map & End-of-Track timing...'
+            });
+
+            tempoEvents.sort((a, b) => (a.tick - b.tick) || (a.seq - b.seq));
+            const cleanTempos = [];
+            for (let i = 0; i < tempoEvents.length; i++) {
+                if (cleanTempos.length > 0 && cleanTempos[cleanTempos.length - 1].tick === tempoEvents[i].tick) {
+                    cleanTempos[cleanTempos.length - 1].usPerQuarter = tempoEvents[i].usPerQuarter;
+                } else {
+                    cleanTempos.push(tempoEvents[i]);
+                }
+            }
+
+            const tTicks = new Float64Array(cleanTempos.length);
+            const tSecs = new Float64Array(cleanTempos.length);
+            const tSecPerTick = new Float64Array(cleanTempos.length);
+            const tBpm = new Float32Array(cleanTempos.length);
+
+            for (let i = 0; i < cleanTempos.length; i++) {
+                tTicks[i] = cleanTempos[i].tick;
+                const us = cleanTempos[i].usPerQuarter;
+                tBpm[i] = 60000000.0 / us;
+                const spt = smpteFps > 0
+                    ? 1.0 / (smpteFps * ticksPerFrame)
+                    : (us / 1000000.0) / ticksPerQuarter;
+                tSecPerTick[i] = spt;
+                if (i === 0) {
+                    tSecs[i] = 0.0;
+                } else {
+                    tSecs[i] = tSecs[i - 1] + (tTicks[i] - tTicks[i - 1]) * tSecPerTick[i - 1];
+                }
+            }
+
+            function tickToSeconds(tick) {
+                let lo = 0;
+                let hi = tTicks.length - 1;
+                while (lo < hi) {
+                    const mid = (lo + hi + 1) >>> 1;
+                    if (tTicks[mid] <= tick) lo = mid;
+                    else hi = mid - 1;
+                }
+                return tSecs[lo] + (tick - tTicks[lo]) * tSecPerTick[lo];
+            }
+
+            const startArr = new Float32Array(noteCount);
+            const endArr = new Float32Array(noteCount);
+            let maxNoteEndSec = 0;
+
+            for (let i = 0; i < noteCount; i++) {
+                const s = tickToSeconds(rawStartTicks[i]);
+                const e = Math.max(s + 0.008, tickToSeconds(rawEndTicks[i]));
+                startArr[i] = s;
+                endArr[i] = e;
+                if (e > maxNoteEndSec) maxNoteEndSec = e;
+            }
+
+            rawStartTicks = null;
+            rawEndTicks = null;
+
+            const eotSeconds = tickToSeconds(maxEndTick);
+            const totalDuration = Math.max(maxNoteEndSec, eotSeconds);
+
+            self.postMessage({
+                type: 'progress',
+                percent: 90,
+                notes: noteCount,
+                stage: 'Sorting notes & packing TypedArrays...'
+            });
+
+            const order = new Uint32Array(noteCount);
+            for (let i = 0; i < noteCount; i++) order[i] = i;
+            order.sort((a, b) => startArr[a] - startArr[b]);
+
+            const noteBuffer = new ArrayBuffer(noteCount * 12);
+            const noteF32 = new Float32Array(noteBuffer);
+            const noteU32 = new Uint32Array(noteBuffer);
+            const sortedStart = new Float32Array(noteCount);
+
+            for (let i = 0; i < noteCount; i++) {
+                const idx = order[i];
+                const s = startArr[idx];
+                const e = endArr[idx];
+                sortedStart[i] = s;
+                const base = i * 3;
+                noteF32[base] = s;
+                noteF32[base + 1] = e;
+                noteU32[base + 2] = rawMeta[idx];
+            }
+
+            const tempoMapBuffer = new ArrayBuffer(tSecs.length * 8 + tBpm.length * 4);
+            const tempoSecF64 = new Float64Array(tempoMapBuffer, 0, tSecs.length);
+            const tempoBpmF32 = new Float32Array(tempoMapBuffer, tSecs.length * 8, tBpm.length);
+            tempoSecF64.set(tSecs);
+            tempoBpmF32.set(tBpm);
+
+            return {
+                noteCount,
+                duration: totalDuration,
+                sortedStart,
+                noteBuffer,
+                tempoMapBuffer,
+                tempoCount: tSecs.length,
+                trackCounts,
+                trackChannels
+            };
+        }
+
+        self.onmessage = function(e) {
+            const msg = e.data;
+            if (msg.cmd === 'parse') {
+                try {
+                    const res = parseMidiArrayBuffer(msg.buffer);
+                    self.postMessage({
+                        type: 'done',
+                        noteCount: res.noteCount,
+                        duration: res.duration,
+                        sortedStart: res.sortedStart,
+                        noteBuffer: res.noteBuffer,
+                        tempoMapBuffer: res.tempoMapBuffer,
+                        tempoCount: res.tempoCount,
+                        trackCounts: res.trackCounts,
+                        trackChannels: res.trackChannels
+                    }, [res.sortedStart.buffer, res.noteBuffer, res.tempoMapBuffer, res.trackCounts.buffer, res.trackChannels.buffer]);
+                } catch (err) {
+                    self.postMessage({
+                        type: 'error',
+                        message: err && err.message ? err.message : 'Failed to parse MIDI file.'
+                    });
+                }
+            }
+        };
+    `;
+
+    const midiWorker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: 'application/javascript' })));
+
+    class PolyphonicSynth {
+        constructor() {
+            this.ctx = null;
+            this.masterGain = null;
+            this.compressor = null;
+            this.enabled = true;
+            this.volume = 0.65;
+            this.maxVoices = 1024;
+            this.waveform = 'triangle';
+            this.voices = [];
+            this.cursor = 0;
+
+            this.freqTable = new Float32Array(128);
+            for (let p = 0; p < 128; p++) {
+                this.freqTable[p] = 440.0 * Math.pow(2.0, (p - 69) / 12.0);
+            }
+        }
+
+        ensureContext() {
+            if (this.ctx) {
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume().catch(() => {});
+                }
+                return;
+            }
+            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextCtor) return;
+
+            this.ctx = new AudioContextCtor();
+            this.compressor = this.ctx.createDynamicsCompressor();
+            this.compressor.threshold.setValueAtTime(-18, this.ctx.currentTime);
+            this.compressor.knee.setValueAtTime(12, this.ctx.currentTime);
+            this.compressor.ratio.setValueAtTime(10, this.ctx.currentTime);
+            this.compressor.attack.setValueAtTime(0.002, this.ctx.currentTime);
+            this.compressor.release.setValueAtTime(0.12, this.ctx.currentTime);
+
+            this.masterGain = this.ctx.createGain();
+            this.masterGain.gain.setValueAtTime(this.enabled ? this.volume : 0.0, this.ctx.currentTime);
+
+            this.compressor.connect(this.masterGain);
+            this.masterGain.connect(this.ctx.destination);
+            this.rebuildPool();
+        }
+
+        setWaveform(type) {
+            const allowed = ['triangle', 'sine', 'sawtooth', 'square'];
+            if (!allowed.includes(type)) return;
+            this.waveform = type;
+            for (let i = 0; i < this.voices.length; i++) {
+                const v = this.voices[i];
+                if (v && v.osc) {
+                    try {
+                        v.osc.type = this.waveform;
+                    } catch (_) {}
+                }
+            }
+        }
+
+        rebuildPool() {
+            if (!this.ctx) return;
+            for (let i = 0; i < this.voices.length; i++) {
+                const v = this.voices[i];
+                if (!v) continue;
+                try {
+                    if (v.osc) { v.osc.stop(); v.osc.disconnect(); }
+                    if (v.gain) { v.gain.disconnect(); }
+                } catch (_) {}
+            }
+            this.voices = new Array(this.maxVoices);
+            this.cursor = 0;
+            const now = this.ctx.currentTime;
+
+            for (let i = 0; i < this.maxVoices; i++) {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = this.waveform;
+                osc.frequency.setValueAtTime(440, now);
+                gain.gain.setValueAtTime(0.00001, now);
+                osc.connect(gain);
+                gain.connect(this.compressor);
+                osc.start(now);
+                this.voices[i] = { osc, gain, endAt: 0 };
+            }
+        }
+
+        allocateVoiceSlot(now) {
+            const len = this.voices.length;
+            if (len === 0) return -1;
+            for (let offset = 0; offset < len; offset++) {
+                const idx = (this.cursor + offset) % len;
+                const v = this.voices[idx];
+                if (!v || now >= (v.endAt || 0) - 0.005) {
+                    this.cursor = (idx + 1) % len;
+                    return idx;
+                }
+            }
+            const idx = this.cursor;
+            this.cursor = (this.cursor + 1) % len;
+            return idx;
+        }
+
+        setMaxVoices(limit) {
+            this.maxVoices = Math.max(1, Math.min(2048, Math.floor(limit || 1024)));
+            if (this.ctx) this.rebuildPool();
+        }
+
+        setVolume(vol) {
+            this.volume = vol;
+            if (this.masterGain && this.ctx) {
+                this.masterGain.gain.setTargetAtTime(this.enabled ? this.volume : 0.0, this.ctx.currentTime, 0.01);
+            }
+        }
+
+        setEnabled(flag) {
+            this.enabled = flag;
+            if (this.masterGain && this.ctx) {
+                this.masterGain.gain.setTargetAtTime(this.enabled ? this.volume : 0.0, this.ctx.currentTime, 0.01);
+            }
+            if (!flag) this.silenceAll();
+        }
+
+        beginFrame() {
+            this.frameNoteCount = 0;
+        }
+
+        playNote(pitch, velocity, durationSec) {
+            if (!this.enabled || !this.ctx || this.voices.length === 0) return;
+            const p = pitch & 127;
+            this.frameNoteCount = (this.frameNoteCount || 0) + 1;
+            if (this.frameNoteCount > this.maxVoices) return;
+
+            const rawVel = Math.max(0, Math.min(127, velocity || 0));
+            if (rawVel === 0) return;
+
+            const linearVel = rawVel / 127.0;
+            const dynamicCurve = Math.pow(linearVel, 2.4);
+            if (dynamicCurve < 0.0015) return;
+
+            const now = this.ctx.currentTime;
+            const voiceScale = this.maxVoices > 512 ? 0.5 : (this.maxVoices > 256 ? 0.65 : 1.0);
+            const peak = Math.min(0.26, dynamicCurve * 0.24 * voiceScale);
+            const sustain = Math.min(1.5, Math.max(0.08, durationSec));
+            const totalLife = sustain + 0.12;
+
+            const slot = this.allocateVoiceSlot(now);
+            if (slot < 0) return;
+            const voice = this.voices[slot];
+            if (!voice || !voice.osc || !voice.gain) return;
+
+            voice.osc.frequency.cancelScheduledValues(now);
+            voice.osc.frequency.setValueAtTime(this.freqTable[p], now);
+            voice.gain.gain.cancelScheduledValues(now);
+            voice.gain.gain.setValueAtTime(0.00001, now);
+            voice.gain.gain.linearRampToValueAtTime(Math.max(0.00005, peak), now + 0.004);
+            voice.gain.gain.exponentialRampToValueAtTime(0.00001, now + totalLife);
+            voice.endAt = now + totalLife;
+        }
+
+        silenceAll() {
+            if (!this.ctx) return;
+            const now = this.ctx.currentTime;
+            for (let i = 0; i < this.voices.length; i++) {
+                const v = this.voices[i];
+                if (!v || !v.gain) continue;
+                v.endAt = 0;
+                try {
+                    v.gain.gain.cancelScheduledValues(now);
+                    v.gain.gain.setValueAtTime(0.00001, now);
+                } catch (_) {}
+            }
+        }
+    }
+
+    const synth = new PolyphonicSynth();
+
+    // Track 1 to Track 63 extracted from reference screenshots (cycles for tracks >= 63)
+    const TRACK_COLORS = [
+        '#2563eb', // 1: blue
+        '#f97316', // 2: orange
+        '#22c55e', // 3: green
+        '#ec4899', // 4: hot pink / magenta-pink
+        '#06b6d4', // 5: cyan
+        '#d946ef', // 6: magenta / purple
+        '#a3e635', // 7: lime
+        '#4f46e5', // 8: indigo-blue
+        '#eab308', // 9: yellow-gold
+        '#0ea5e9', // 10: sky blue
+        '#ef4444', // 11: red
+        '#10b981', // 12: emerald / mint
+        '#f43f5e', // 13: rose-pink
+        '#4ade80', // 14: bright green
+        '#8b5cf6', // 15: violet-purple
+        '#bef264', // 16: light lime
+        '#2563eb', // 17: blue
+        '#f97316', // 18: orange
+        '#22c55e', // 19: green
+        '#ec4899', // 20: hot pink
+        '#06b6d4', // 21: cyan
+        '#d946ef', // 22: magenta
+        '#a3e635', // 23: lime
+        '#4f46e5', // 24: indigo-blue
+        '#eab308', // 25: yellow-gold
+        '#0ea5e9', // 26: sky blue
+        '#ef4444', // 27: red
+        '#10b981', // 28: emerald / mint
+        '#f43f5e', // 29: rose-pink
+        '#4ade80', // 30: bright green
+        '#8b5cf6', // 31: violet-purple
+        '#bef264', // 32: light lime
+        '#2563eb', // 33: blue
+        '#f97316', // 34: orange
+        '#22c55e', // 35: green
+        '#ec4899', // 36: hot pink
+        '#06b6d4', // 37: cyan
+        '#d946ef', // 38: magenta
+        '#a3e635', // 39: lime
+        '#4f46e5', // 40: indigo-blue
+        '#eab308', // 41: yellow-gold
+        '#0ea5e9', // 42: sky blue
+        '#ef4444', // 43: red
+        '#10b981', // 44: emerald / mint
+        '#f43f5e', // 45: rose-pink
+        '#4ade80', // 46: bright green
+        '#8b5cf6', // 47: violet-purple
+        '#bef264', // 48: light lime
+        '#2563eb', // 49: blue
+        '#f97316', // 50: orange
+        '#22c55e', // 51: green
+        '#ec4899', // 52: hot pink
+        '#06b6d4', // 53: cyan
+        '#d946ef', // 54: magenta
+        '#a3e635', // 55: lime
+        '#4f46e5', // 56: indigo-blue
+        '#eab308', // 57: yellow-gold (Drums)
+        '#0ea5e9', // 58: sky blue
+        '#ef4444', // 59: red
+        '#10b981', // 60: emerald / mint
+        '#f43f5e', // 61: rose-pink
+        '#4ade80', // 62: bright green
+        '#8b5cf6'  // 63: violet-purple
+    ];
+
+    function getTrackHex(trkIndex) {
+        const idx = ((trkIndex || 0) % TRACK_COLORS.length + TRACK_COLORS.length) % TRACK_COLORS.length;
+        return TRACK_COLORS[idx];
+    }
+
+    const TRACK_RGB_256 = new Float32Array(256 * 3);
+    for (let t = 0; t < 256; t++) {
+        const num = parseInt(getTrackHex(t).slice(1), 16);
+        TRACK_RGB_256[t * 3] = ((num >> 16) & 255) / 255.0;
+        TRACK_RGB_256[t * 3 + 1] = ((num >> 8) & 255) / 255.0;
+        TRACK_RGB_256[t * 3 + 2] = (num & 255) / 255.0;
+    }
+
+    const IS_BLACK_KEY = new Uint8Array(128);
+    const WHITE_IDX = new Int16Array(128);
+    let totalWhiteKeys = 0;
+    for (let p = 0; p < 128; p++) {
+        const semitone = p % 12;
+        const black = (semitone === 1 || semitone === 3 || semitone === 6 || semitone === 8 || semitone === 10);
+        IS_BLACK_KEY[p] = black ? 1 : 0;
+        WHITE_IDX[p] = black ? -1 : totalWhiteKeys++;
+    }
+
+    const KEY_NORM_X = new Float32Array(128);
+    const KEY_NORM_W = new Float32Array(128);
+    const whiteNormWidth = 1.0 / totalWhiteKeys;
+    const blackNormWidth = whiteNormWidth * 0.62;
+
+    for (let p = 0; p < 128; p++) {
+        if (!IS_BLACK_KEY[p]) {
+            KEY_NORM_X[p] = WHITE_IDX[p] * whiteNormWidth;
+            KEY_NORM_W[p] = whiteNormWidth;
+        } else {
+            const prevWhite = WHITE_IDX[p - 1];
+            KEY_NORM_X[p] = (prevWhite + 1) * whiteNormWidth - blackNormWidth * 0.5;
+            KEY_NORM_W[p] = blackNormWidth;
+        }
+    }
+
+    const glCanvas = document.getElementById('gl-canvas');
+    const pianoCanvas = document.getElementById('piano-canvas');
+    const pianoCtx = pianoCanvas.getContext('2d', { alpha: false });
+
+    const gl = glCanvas.getContext('webgl2', {
+        alpha: false,
+        antialias: false,
+        depth: false,
+        stencil: false,
+        powerPreference: 'high-performance'
+    });
+
+    const vertexShaderSrc = `#version 300 es
+        precision highp float;
+
+        layout(location = 0) in vec2 a_corner;
+        layout(location = 1) in float a_startTime;
+        layout(location = 2) in float a_endTime;
+        layout(location = 3) in uint a_meta;
+
+        uniform float u_currentTime;
+        uniform float u_lookaheadSec;
+        uniform vec2 u_viewportPx;
+        uniform float u_keyX[128];
+        uniform float u_keyW[128];
+        uniform vec3 u_trackColors[256];
+
+        out vec3 v_color;
+        out vec2 v_uv;
+        out vec2 v_notePx;
+
+        void main() {
+            if (a_endTime <= u_currentTime || a_startTime >= u_currentTime + u_lookaheadSec) {
+                gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+                return;
+            }
+
+            uint pitch = a_meta & 0x7Fu;
+            uint trk = (a_meta >> 24u) & 0xFFu;
+
+            float y0 = max(0.0, (a_startTime - u_currentTime) / u_lookaheadSec);
+            float y1 = min(1.0, (a_endTime - u_currentTime) / u_lookaheadSec);
+
+            float minHeightNorm = 2.0 / max(1.0, u_viewportPx.y);
+            if (y1 - y0 < minHeightNorm) {
+                y1 = min(1.0, y0 + minHeightNorm);
+            }
+
+            uint semi = pitch % 12u;
+            bool isBlack = (semi == 1u || semi == 3u || semi == 6u || semi == 8u || semi == 10u);
+
+            float slotW = u_keyW[pitch];
+            float width = isBlack ? (slotW * 0.92) : slotW;
+            float xLeft = u_keyX[pitch] + (slotW - width) * 0.5;
+
+            float xNorm = xLeft + a_corner.x * width;
+            float yNorm = mix(y0, y1, a_corner.y);
+
+            gl_Position = vec4(xNorm * 2.0 - 1.0, yNorm * 2.0 - 1.0, 0.0, 1.0);
+
+            v_color = u_trackColors[trk];
+            v_uv = a_corner;
+            v_notePx = vec2(max(1.0, width * u_viewportPx.x), max(1.0, (y1 - y0) * u_viewportPx.y));
+        }
+    `;
+
+    const fragmentShaderSrc = `#version 300 es
+        precision mediump float;
+
+        in vec3 v_color;
+        in vec2 v_uv;
+        in vec2 v_notePx;
+
+        out vec4 fragColor;
+
+        void main() {
+            float dx = min(v_uv.x, 1.0 - v_uv.x) * v_notePx.x;
+            float dy = min(v_uv.y, 1.0 - v_uv.y) * v_notePx.y;
+            float edgeDist = min(dx, dy);
+
+            float isBorder = (v_notePx.x > 2.2 && v_notePx.y > 2.2 && edgeDist < 1.05) ? 1.0 : 0.0;
+            vec3 darkBorder = v_color * 0.42;
+            vec3 finalCol = mix(v_color, darkBorder, isBorder);
+
+            fragColor = vec4(finalCol, 1.0);
+        }
+    `;
+
+    function createShaderProgram(glCtx, vsSrc, fsSrc) {
+        const vs = glCtx.createShader(glCtx.VERTEX_SHADER);
+        glCtx.shaderSource(vs, vsSrc);
+        glCtx.compileShader(vs);
+        if (!glCtx.getShaderParameter(vs, glCtx.COMPILE_STATUS)) return null;
+
+        const fs = glCtx.createShader(glCtx.FRAGMENT_SHADER);
+        glCtx.shaderSource(fs, fsSrc);
+        glCtx.compileShader(fs);
+        if (!glCtx.getShaderParameter(fs, glCtx.COMPILE_STATUS)) return null;
+
+        const prog = glCtx.createProgram();
+        glCtx.attachShader(prog, vs);
+        glCtx.attachShader(prog, fs);
+        glCtx.linkProgram(prog);
+        if (!glCtx.getProgramParameter(prog, glCtx.LINK_STATUS)) return null;
+        return prog;
+    }
+
+    let shaderProg = null;
+    let glVao = null;
+    let instanceBuffer = null;
+    let instanceCapacityBytes = 0;
+    let uniforms = {};
+
+    if (gl) {
+        shaderProg = createShaderProgram(gl, vertexShaderSrc, fragmentShaderSrc);
+        if (shaderProg) {
+            gl.useProgram(shaderProg);
+            glVao = gl.createVertexArray();
+            gl.bindVertexArray(glVao);
+
+            const stripQuad = new Float32Array([
+                0.0, 0.0,
+                1.0, 0.0,
+                0.0, 1.0,
+                1.0, 1.0
+            ]);
+            const quadVbo = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+            gl.bufferData(gl.ARRAY_BUFFER, stripQuad, gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(0);
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+            instanceBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+
+            gl.enableVertexAttribArray(1);
+            gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 12, 0);
+            gl.vertexAttribDivisor(1, 1);
+
+            gl.enableVertexAttribArray(2);
+            gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 12, 4);
+            gl.vertexAttribDivisor(2, 1);
+
+            gl.enableVertexAttribArray(3);
+            gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 12, 8);
+            gl.vertexAttribDivisor(3, 1);
+
+            gl.bindVertexArray(null);
+
+            uniforms = {
+                currentTime: gl.getUniformLocation(shaderProg, 'u_currentTime'),
+                lookaheadSec: gl.getUniformLocation(shaderProg, 'u_lookaheadSec'),
+                viewportPx: gl.getUniformLocation(shaderProg, 'u_viewportPx'),
+                keyX: gl.getUniformLocation(shaderProg, 'u_keyX'),
+                keyW: gl.getUniformLocation(shaderProg, 'u_keyW'),
+                trackColors: gl.getUniformLocation(shaderProg, 'u_trackColors')
+            };
+
+            gl.uniform1fv(uniforms.keyX, KEY_NORM_X);
+            gl.uniform1fv(uniforms.keyW, KEY_NORM_W);
+            gl.uniform3fv(uniforms.trackColors, TRACK_RGB_256);
+        }
+    }
+
+    const midiData = {
+        loaded: false,
+        title: '',
+        noteCount: 0,
+        duration: 0,
+        startTimes: new Float32Array(0),
+        f32: new Float32Array(0),
+        u32: new Uint32Array(0),
+        tempoSecs: new Float64Array([0]),
+        tempoBpms: new Float32Array([120]),
+        maxDurationSec: 1.0,
+        trackCount: 0,
+        trackCounts: new Uint32Array(0),
+        trackChannels: new Uint8Array(0),
+        trackVisible: new Uint8Array(256).fill(1),
+        trackMuted: new Uint8Array(256).fill(0)
+    };
+
+    function getBpmAtTime(sec) {
+        const ts = midiData.tempoSecs;
+        const tb = midiData.tempoBpms;
+        if (!ts || ts.length === 0 || !tb || tb.length === 0) return 120.0;
+        let lo = 0;
+        let hi = ts.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            if (ts[mid] <= sec) lo = mid;
+            else hi = mid - 1;
+        }
+        return tb[lo];
+    }
+
+    const clockState = {
+        playing: false,
+        anchorPerfMs: 0,
+        anchorSongSec: 0,
+        currentSec: 0,
+        lastAudioSec: 0,
+        playbackSpeed: 1.0,
+        fallTimeSec: 1.0,
+        pianoHeight: 112,
+        keyPxX: new Float32Array(128),
+        keyPxW: new Float32Array(128),
+        activeKeyHex: new Array(128).fill(null),
+        pressedKey: -1,
+
+        lastFramePerfMs: performance.now(),
+        smoothFps: 60,
+        visibleNotes: 0,
+        activePolyphony: 0,
+        passedNotes: 0,
+        npsEvents: [],
+        nps: 0,
+        lastHudMs: 0
+    };
+
+    function computeWallClockSec(nowPerfMs) {
+        if (!clockState.playing) return clockState.anchorSongSec;
+        const elapsedSec = (nowPerfMs - clockState.anchorPerfMs) / 1000.0;
+        return clockState.anchorSongSec + elapsedSec * clockState.playbackSpeed;
+    }
+
+    function seekTo(sec) {
+        const clamped = Math.max(0, Math.min(midiData.duration, sec));
+        clockState.anchorSongSec = clamped;
+        clockState.currentSec = clamped;
+        clockState.lastAudioSec = clamped;
+        if (clockState.playing) {
+            clockState.anchorPerfMs = performance.now();
+        }
+        synth.silenceAll();
+    }
+
+    let viewW = window.innerWidth;
+    let viewH = window.innerHeight;
+    let pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+
+    function handleResize() {
+        viewW = window.innerWidth;
+        viewH = window.innerHeight;
+        pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+
+        clockState.pianoHeight = viewH < 520 ? 80 : (viewH < 760 ? 96 : 112);
+        const wfHeight = Math.max(80, viewH - clockState.pianoHeight);
+
+        glCanvas.style.height = wfHeight + 'px';
+        glCanvas.width = Math.floor(viewW * pixelRatio);
+        glCanvas.height = Math.floor(wfHeight * pixelRatio);
+        if (gl) {
+            gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+        }
+
+        pianoCanvas.style.height = clockState.pianoHeight + 'px';
+        pianoCanvas.width = Math.floor(viewW * pixelRatio);
+        pianoCanvas.height = Math.floor(clockState.pianoHeight * pixelRatio);
+        pianoCtx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+
+        for (let p = 0; p < 128; p++) {
+            clockState.keyPxX[p] = KEY_NORM_X[p] * viewW;
+            clockState.keyPxW[p] = KEY_NORM_W[p] * viewW;
+        }
+    }
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+    function drawPiano128() {
+        const h = clockState.pianoHeight;
+        const blackKeyH = h * 0.62;
+
+        pianoCtx.fillStyle = '#07090d';
+        pianoCtx.fillRect(0, 0, viewW, h);
+
+        for (let p = 0; p < 128; p++) {
+            if (IS_BLACK_KEY[p]) continue;
+            const x = clockState.keyPxX[p];
+            const w = clockState.keyPxW[p];
+            const lit = clockState.activeKeyHex[p];
+
+            if (lit) {
+                pianoCtx.fillStyle = lit;
+                pianoCtx.fillRect(x, 0, Math.max(1, w - 0.8), h);
+            } else {
+                pianoCtx.fillStyle = '#e5e7eb';
+                pianoCtx.fillRect(x, 0, Math.max(1, w - 0.8), h);
+                pianoCtx.fillStyle = '#9ca3af';
+                pianoCtx.fillRect(x, h - 5, Math.max(1, w - 0.8), 5);
+            }
+
+            if (p === 60 && w >= 6.5) {
+                pianoCtx.fillStyle = lit ? '#000000' : '#374151';
+                pianoCtx.font = 'bold 9px JetBrains Mono, monospace';
+                pianoCtx.textAlign = 'center';
+                pianoCtx.fillText('C4', x + w * 0.5, h - 9);
+            }
+        }
+
+        for (let p = 0; p < 128; p++) {
+            if (!IS_BLACK_KEY[p]) continue;
+            const x = clockState.keyPxX[p];
+            const w = clockState.keyPxW[p];
+            const lit = clockState.activeKeyHex[p];
+
+            if (lit) {
+                pianoCtx.fillStyle = lit;
+                pianoCtx.fillRect(x, 0, w, blackKeyH);
+                pianoCtx.strokeStyle = '#ffffff';
+                pianoCtx.lineWidth = 0.8;
+                pianoCtx.strokeRect(x, 0, w, blackKeyH);
+            } else {
+                pianoCtx.fillStyle = '#0c0f16';
+                pianoCtx.fillRect(x, 0, w, blackKeyH);
+                pianoCtx.fillStyle = '#252c3b';
+                pianoCtx.fillRect(x + 1, 1, Math.max(1, w - 2), blackKeyH - 4);
+            }
+        }
+    }
+
+    function lowerBound(arr, target) {
+        let lo = 0;
+        let hi = arr.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (arr[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    function upperBound(arr, target) {
+        let lo = 0;
+        let hi = arr.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (arr[mid] <= target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    const densityCanvas = document.getElementById('density-canvas');
+    const densityCtx = densityCanvas.getContext('2d');
+
+    function renderDensityBar() {
+        const rect = densityCanvas.getBoundingClientRect();
+        const w = Math.max(120, Math.floor(rect.width));
+        const h = Math.max(8, Math.floor(rect.height));
+        densityCanvas.width = w;
+        densityCanvas.height = h;
+        densityCtx.clearRect(0, 0, w, h);
+
+        if (!midiData.loaded || midiData.noteCount === 0 || midiData.duration <= 0) return;
+
+        const bins = new Uint32Array(w);
+        let peak = 1;
+        const scale = (w - 1) / midiData.duration;
+        const starts = midiData.startTimes;
+        const stride = midiData.noteCount > 500000 ? Math.floor(midiData.noteCount / 500000) : 1;
+
+        for (let i = 0; i < midiData.noteCount; i += stride) {
+            const idx = Math.min(w - 1, Math.floor(starts[i] * scale));
+            bins[idx]++;
+            if (bins[idx] > peak) peak = bins[idx];
+        }
+
+        for (let x = 0; x < w; x++) {
+            if (bins[x] === 0) continue;
+            const ratio = Math.sqrt(bins[x] / peak);
+            const barH = Math.max(2, ratio * h);
+            densityCtx.fillStyle = ratio > 0.72 ? '#a3e635' : (ratio > 0.35 ? '#22d3ee' : '#52525b');
+            densityCtx.fillRect(x, h - barH, 1, barH);
+        }
+    }
+
+    let stageBuffer = null;
+    let stageF32 = null;
+    let stageU32 = null;
+
+    function frameLoop(nowPerfMs) {
+        requestAnimationFrame(frameLoop);
+
+        const dtSec = (nowPerfMs - clockState.lastFramePerfMs) / 1000.0;
+        clockState.lastFramePerfMs = nowPerfMs;
+
+        if (dtSec > 0.0001 && dtSec < 1.0) {
+            const instFps = 1.0 / dtSec;
+            clockState.smoothFps = clockState.smoothFps * 0.88 + instFps * 0.12;
+        }
+
+        clockState.currentSec = computeWallClockSec(nowPerfMs);
+        if (clockState.playing && clockState.currentSec >= midiData.duration) {
+            clockState.currentSec = midiData.duration;
+            clockState.anchorSongSec = midiData.duration;
+            pauseSong();
+        }
+
+        const curSec = clockState.currentSec;
+        const visArr = midiData.trackVisible;
+        const muteArr = midiData.trackMuted;
+
+        let newlyTriggered = 0;
+        if (clockState.playing && midiData.loaded && midiData.noteCount > 0) {
+            const tStart = clockState.lastAudioSec;
+            const tEnd = curSec;
+            if (tEnd > tStart) {
+                const i0 = lowerBound(midiData.startTimes, tStart);
+                const i1 = upperBound(midiData.startTimes, tEnd);
+                newlyTriggered = Math.max(0, i1 - i0);
+
+                if (newlyTriggered > 0 && synth.enabled) {
+                    synth.beginFrame();
+                    const maxPerFrame = Math.max(16, synth.maxVoices * 2);
+                    const step = newlyTriggered > maxPerFrame ? Math.ceil(newlyTriggered / maxPerFrame) : 1;
+                    for (let i = i0; i < i1; i += step) {
+                        const base = i * 3;
+                        const meta = midiData.u32[base + 2];
+                        const trk = (meta >>> 24) & 0xFF;
+                        if (muteArr[trk]) continue;
+                        const s = midiData.f32[base];
+                        const e = midiData.f32[base + 1];
+                        const pitch = meta & 0x7F;
+                        const vel = (meta >> 8) & 0x7F;
+                        const dur = Math.max(0.05, (e - s) / clockState.playbackSpeed);
+                        synth.playNote(pitch, vel, dur);
+                    }
+                }
+            }
+            clockState.lastAudioSec = tEnd;
+        }
+
+        if (newlyTriggered > 0) {
+            clockState.npsEvents.push({ ms: nowPerfMs, count: newlyTriggered });
+        }
+        while (clockState.npsEvents.length > 0 && nowPerfMs - clockState.npsEvents[0].ms > 1000) {
+            clockState.npsEvents.shift();
+        }
+        let npsSum = 0;
+        for (let i = 0; i < clockState.npsEvents.length; i++) {
+            npsSum += clockState.npsEvents[i].count;
+        }
+        clockState.nps = npsSum;
+
+        const lookaheadSec = Math.max(0.05, clockState.fallTimeSec);
+
+        if (gl) {
+            gl.clearColor(0.012, 0.015, 0.022, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+
+        clockState.activeKeyHex.fill(null);
+        if (clockState.pressedKey >= 0) {
+            clockState.activeKeyHex[clockState.pressedKey] = '#a3e635';
+        }
+
+        let drawCount = 0;
+        let polyCount = 0;
+        if (midiData.loaded && midiData.noteCount > 0) {
+            const winMin = Math.max(0, curSec - midiData.maxDurationSec);
+            const winMax = curSec + lookaheadSec;
+
+            const firstIdx = lowerBound(midiData.startTimes, winMin);
+            const lastIdx = upperBound(midiData.startTimes, winMax);
+            const candidateCount = Math.max(0, lastIdx - firstIdx);
+
+            if (candidateCount > 0) {
+                const neededBytes = candidateCount * 12;
+                if (!stageBuffer || stageBuffer.byteLength < neededBytes) {
+                    stageBuffer = new ArrayBuffer(Math.max(neededBytes, 65536));
+                    stageF32 = new Float32Array(stageBuffer);
+                    stageU32 = new Uint32Array(stageBuffer);
+                }
+
+                let outCount = 0;
+                const srcF32 = midiData.f32;
+                const srcU32 = midiData.u32;
+
+                for (let i = firstIdx; i < lastIdx; i++) {
+                    const srcBase = i * 3;
+                    const s = srcF32[srcBase];
+                    const e = srcF32[srcBase + 1];
+                    if (e > curSec && s < winMax) {
+                        const meta = srcU32[srcBase + 2];
+                        const trk = (meta >>> 24) & 0xFF;
+                        if (!visArr[trk]) continue;
+                        if (s <= curSec) polyCount++;
+                        const dstBase = outCount * 3;
+                        stageF32[dstBase] = s;
+                        stageF32[dstBase + 1] = e;
+                        stageU32[dstBase + 2] = meta;
+                        outCount++;
+                    }
+                }
+
+                if (outCount > 0 && gl && shaderProg && glVao) {
+                    const byteLen = outCount * 12;
+                    const activeView = new Uint8Array(stageBuffer, 0, byteLen);
+
+                    gl.useProgram(shaderProg);
+                    gl.bindVertexArray(glVao);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+
+                    if (byteLen > instanceCapacityBytes) {
+                        instanceCapacityBytes = Math.max(byteLen, 1024 * 12);
+                        gl.bufferData(gl.ARRAY_BUFFER, instanceCapacityBytes, gl.DYNAMIC_DRAW);
+                    }
+                    gl.bufferSubData(gl.ARRAY_BUFFER, 0, activeView);
+
+                    gl.uniform1f(uniforms.currentTime, curSec);
+                    gl.uniform1f(uniforms.lookaheadSec, lookaheadSec);
+                    gl.uniform2f(uniforms.viewportPx, Math.max(1.0, glCanvas.width), Math.max(1.0, glCanvas.height));
+
+                    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, outCount);
+                    gl.bindVertexArray(null);
+                    drawCount = outCount;
+                }
+            }
+
+            const hitStart = lowerBound(midiData.startTimes, Math.max(0, curSec - midiData.maxDurationSec));
+            const hitEnd = upperBound(midiData.startTimes, curSec);
+            clockState.passedNotes = hitEnd;
+            const scanFrom = Math.max(hitStart, hitEnd - 4096);
+            for (let i = scanFrom; i < hitEnd; i++) {
+                const base = i * 3;
+                const s = midiData.f32[base];
+                const e = midiData.f32[base + 1];
+                if (s <= curSec && e > curSec) {
+                    const meta = midiData.u32[base + 2];
+                    const trk = (meta >>> 24) & 0xFF;
+                    if (!visArr[trk]) continue;
+                    const p = meta & 0x7F;
+                    clockState.activeKeyHex[p] = getTrackHex(trk);
+                }
+            }
+        } else {
+            clockState.passedNotes = 0;
+        }
+        clockState.visibleNotes = drawCount;
+        clockState.activePolyphony = polyCount;
+
+        drawPiano128();
+
+        if (nowPerfMs - clockState.lastHudMs > 65) {
+            refreshHud();
+            refreshTimeline();
+            clockState.lastHudMs = nowPerfMs;
+        }
+    }
+
+    function formatNumber(n) {
+        return n.toLocaleString('en-US');
+    }
+
+    function formatClock(sec) {
+        const s = Math.max(0, sec);
+        const min = Math.floor(s / 60);
+        const remSec = Math.floor(s % 60);
+        const ms = Math.floor((s % 1) * 1000);
+        return `${String(min).padStart(2, '0')}:${String(remSec).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+    }
+
+    function refreshHud() {
+        document.getElementById('hud-note').textContent =
+            `${formatNumber(clockState.passedNotes)}/${formatNumber(midiData.noteCount)}`;
+        document.getElementById('hud-fps').textContent = Math.round(clockState.smoothFps);
+        document.getElementById('hud-bpm').textContent = getBpmAtTime(clockState.currentSec).toFixed(2);
+        document.getElementById('hud-nps').textContent = formatNumber(clockState.nps);
+        document.getElementById('hud-render').textContent = formatNumber(clockState.visibleNotes);
+        document.getElementById('hud-polyphony').textContent = formatNumber(clockState.activePolyphony);
+    }
+
+    function refreshTimeline() {
+        document.getElementById('time-compact').textContent =
+            `${formatClock(clockState.currentSec)} / ${formatClock(midiData.duration)}`;
+        const pct = midiData.duration > 0
+            ? Math.min(100, Math.max(0, (clockState.currentSec / midiData.duration) * 100))
+            : 0;
+        document.getElementById('seek-progress').style.width = pct + '%';
+        document.getElementById('seek-thumb').style.left = pct + '%';
+    }
+
+    function notify(msg) {
+        const box = document.getElementById('toast-box');
+        document.getElementById('toast-message').textContent = msg;
+        box.classList.remove('opacity-0', '-translate-y-2');
+        box.classList.add('opacity-100', 'translate-y-0');
+        clearTimeout(box._timer);
+        box._timer = setTimeout(() => {
+            box.classList.remove('opacity-100', 'translate-y-0');
+            box.classList.add('opacity-0', '-translate-y-2');
+        }, 3000);
+    }
+
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingTitle = document.getElementById('loading-title');
+    const loadingSubtitle = document.getElementById('loading-subtitle');
+    const loadingBar = document.getElementById('loading-bar');
+    const loadingStats = document.getElementById('loading-stats');
+    const emptyState = document.getElementById('empty-state');
+
+    const playPauseBtn = document.getElementById('play-pause-btn');
+    const restartBtn = document.getElementById('restart-btn');
+    const iconPlay = document.getElementById('icon-play');
+    const iconPause = document.getElementById('icon-pause');
+
+    let incomingFileName = '';
+
+    function playSong() {
+        if (!midiData.loaded || midiData.noteCount === 0) return;
+        synth.ensureContext();
+        if (clockState.anchorSongSec >= midiData.duration) {
+            clockState.anchorSongSec = 0;
+            clockState.currentSec = 0;
+            clockState.lastAudioSec = 0;
+        }
+        clockState.anchorPerfMs = performance.now();
+        clockState.lastAudioSec = clockState.anchorSongSec;
+        clockState.playing = true;
+
+        iconPlay.classList.add('hidden');
+        iconPause.classList.remove('hidden');
+    }
+
+    function pauseSong() {
+        if (clockState.playing) {
+            clockState.anchorSongSec = computeWallClockSec(performance.now());
+            clockState.currentSec = clockState.anchorSongSec;
+        }
+        clockState.playing = false;
+        synth.silenceAll();
+
+        iconPlay.classList.remove('hidden');
+        iconPause.classList.add('hidden');
+    }
+
+    function restartSong() {
+        pauseSong();
+        seekTo(0);
+        refreshTimeline();
+        refreshHud();
+    }
+
+    // Track UI Rendering & State
+    const trackListEl = document.getElementById('track-list');
+    const trackCountLabel = document.getElementById('track-count-label');
+
+    function renderTrackList() {
+        trackCountLabel.textContent = midiData.trackCount;
+        if (!midiData.loaded || midiData.trackCount === 0) {
+            trackListEl.innerHTML = '<div class="text-zinc-500 text-center py-4 font-mono text-[11px]">No MIDI loaded</div>';
+            return;
+        }
+
+        const frag = document.createDocumentFragment();
+        const limit = Math.min(midiData.trackCount, midiData.trackCounts.length);
+        for (let t = 0; t < limit; t++) {
+            const row = document.createElement('div');
+            row.className = 'flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-black/50 border border-white/5 font-mono text-[11px] min-w-0';
+
+            const trkColor = getTrackHex(t);
+
+            const info = document.createElement('div');
+            info.className = 'truncate flex-1 min-w-0';
+            info.innerHTML = `<span class="font-semibold" style="color: ${trkColor};">Track ${t + 1}</span> <span class="text-zinc-400 text-[10px]">(${formatNumber(midiData.trackCounts[t])})</span>`;
+
+            const controls = document.createElement('div');
+            controls.className = 'flex items-center gap-1 shrink-0';
+
+            const isVis = midiData.trackVisible[t] === 1;
+            const isMuted = midiData.trackMuted[t] === 1;
+            const bothActive = isVis && !isMuted;
+
+            const allBtn = document.createElement('button');
+            allBtn.className = `w-7 h-5 flex items-center justify-center rounded text-[9px] font-bold border shrink-0 ${bothActive ? 'bg-[#a3e635] text-black border-[#a3e635]' : 'bg-zinc-900 text-zinc-400 border-white/10'}`;
+            allBtn.textContent = 'All';
+            allBtn.title = 'Toggle both Visibility & Audio (any active state turns both OFF first)';
+            allBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const curVis = midiData.trackVisible[t] === 1;
+                const curUnmuted = midiData.trackMuted[t] === 0;
+                if (curVis || curUnmuted) {
+                    midiData.trackVisible[t] = 0;
+                    midiData.trackMuted[t] = 1;
+                } else {
+                    midiData.trackVisible[t] = 1;
+                    midiData.trackMuted[t] = 0;
+                }
+                renderTrackList();
+            });
+
+            const visBtn = document.createElement('button');
+            visBtn.className = `w-8 h-5 flex items-center justify-center rounded text-[10px] border shrink-0 ${isVis ? 'bg-[#a3e635]/15 text-[#a3e635] border-[#a3e635]/35' : 'bg-zinc-900 text-zinc-500 border-white/10'}`;
+            visBtn.textContent = isVis ? 'VIS' : 'HID';
+            visBtn.title = 'Toggle Visibility';
+            visBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                midiData.trackVisible[t] = midiData.trackVisible[t] ? 0 : 1;
+                renderTrackList();
+            });
+
+            const muteBtn = document.createElement('button');
+            muteBtn.className = `w-9 h-5 flex items-center justify-center rounded text-[10px] border shrink-0 ${!isMuted ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/35' : 'bg-rose-500/15 text-rose-400 border-rose-500/35'}`;
+            muteBtn.textContent = isMuted ? 'MUTE' : 'SND';
+            muteBtn.title = 'Toggle Audio';
+            muteBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                midiData.trackMuted[t] = midiData.trackMuted[t] ? 0 : 1;
+                renderTrackList();
+            });
+
+            controls.appendChild(allBtn);
+            controls.appendChild(visBtn);
+            controls.appendChild(muteBtn);
+            row.appendChild(info);
+            row.appendChild(controls);
+            frag.appendChild(row);
+        }
+        trackListEl.innerHTML = '';
+        trackListEl.appendChild(frag);
+    }
+
+    document.getElementById('tracks-show-all').addEventListener('click', () => {
+        midiData.trackVisible.fill(1);
+        renderTrackList();
+    });
+    document.getElementById('tracks-hide-all').addEventListener('click', () => {
+        midiData.trackVisible.fill(0);
+        renderTrackList();
+    });
+    document.getElementById('tracks-unmute-all').addEventListener('click', () => {
+        midiData.trackMuted.fill(0);
+        renderTrackList();
+    });
+    document.getElementById('tracks-mute-all').addEventListener('click', () => {
+        midiData.trackMuted.fill(1);
+        renderTrackList();
+    });
+
+    midiWorker.onmessage = function(e) {
+        const msg = e.data;
+        if (msg.type === 'progress') {
+            loadingBar.style.width = msg.percent + '%';
+            loadingSubtitle.textContent = msg.stage;
+            loadingStats.textContent = `${formatNumber(msg.notes)} notes`;
+        } else if (msg.type === 'done') {
+            loadingBar.style.width = '100%';
+            loadingSubtitle.textContent = 'Ready';
+
+            midiData.loaded = true;
+            midiData.title = incomingFileName;
+            midiData.noteCount = msg.noteCount;
+            midiData.duration = msg.duration;
+            midiData.startTimes = msg.sortedStart;
+            midiData.f32 = new Float32Array(msg.noteBuffer);
+            midiData.u32 = new Uint32Array(msg.noteBuffer);
+
+            const tCounts = msg.trackCounts ? new Uint32Array(msg.trackCounts) : new Uint32Array([msg.noteCount]);
+            const tChannels = msg.trackChannels ? new Uint8Array(msg.trackChannels) : new Uint8Array(tCounts.length);
+            midiData.trackCount = tCounts.length;
+            midiData.trackCounts = tCounts;
+            midiData.trackChannels = tChannels;
+            midiData.trackVisible = new Uint8Array(256).fill(1);
+            midiData.trackMuted = new Uint8Array(256).fill(0);
+
+            if (msg.tempoMapBuffer && msg.tempoCount > 0) {
+                midiData.tempoSecs = new Float64Array(msg.tempoMapBuffer, 0, msg.tempoCount);
+                midiData.tempoBpms = new Float32Array(msg.tempoMapBuffer, msg.tempoCount * 8, msg.tempoCount);
+            } else {
+                midiData.tempoSecs = new Float64Array([0]);
+                midiData.tempoBpms = new Float32Array([120]);
+            }
+
+            let maxDur = 0.5;
+            const scanStep = msg.noteCount > 1000000 ? Math.floor(msg.noteCount / 1000000) : 1;
+            for (let i = 0; i < msg.noteCount; i += scanStep) {
+                const d = midiData.f32[i * 3 + 1] - midiData.f32[i * 3];
+                if (d > maxDur) maxDur = d;
+            }
+            midiData.maxDurationSec = Math.min(600.0, maxDur + 1.0);
+
+            seekTo(0);
+            renderTrackList();
+            emptyState.classList.add('hidden');
+            playPauseBtn.disabled = false;
+            restartBtn.disabled = false;
+
+            renderDensityBar();
+            refreshTimeline();
+            refreshHud();
+
+            loadingOverlay.classList.add('hidden');
+            loadingOverlay.classList.remove('flex');
+
+            notify(`Loaded: ${formatNumber(msg.noteCount)} notes (${formatClock(msg.duration)})`);
+            playSong();
+        } else if (msg.type === 'error') {
+            loadingOverlay.classList.add('hidden');
+            loadingOverlay.classList.remove('flex');
+            notify('Error: ' + msg.message);
+        }
+    };
+
+    function loadMidiFile(file) {
+        if (!file) return;
+        const lowerName = file.name.toLowerCase();
+        if (!lowerName.endsWith('.mid') && !lowerName.endsWith('.midi') && file.type && !file.type.includes('midi')) {
+            notify('Please select a .mid or .midi file.');
+            return;
+        }
+
+        pauseSong();
+        incomingFileName = file.name;
+
+        loadingTitle.textContent = 'Reading MIDI File...';
+        loadingSubtitle.textContent = `${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`;
+        loadingBar.style.width = '8%';
+        loadingStats.textContent = 'Sending buffer to Web Worker...';
+        loadingOverlay.classList.remove('hidden');
+        loadingOverlay.classList.add('flex');
+
+        const reader = new FileReader();
+        reader.onload = function(ev) {
+            try {
+                const buf = ev.target.result;
+                midiWorker.postMessage({ cmd: 'parse', buffer: buf }, [buf]);
+            } catch (err) {
+                loadingOverlay.classList.add('hidden');
+                loadingOverlay.classList.remove('flex');
+                notify('Failed to dispatch MIDI buffer to worker.');
+            }
+        };
+        reader.onerror = function() {
+            loadingOverlay.classList.add('hidden');
+            loadingOverlay.classList.remove('flex');
+            notify('Failed to read file from disk.');
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    document.getElementById('midi-file-input').addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) {
+            loadMidiFile(e.target.files[0]);
+            e.target.value = '';
+        }
+    });
+
+    const dropOverlay = document.getElementById('drop-overlay');
+    let dragDepth = 0;
+    window.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        dragDepth++;
+        dropOverlay.classList.remove('hidden');
+        dropOverlay.classList.add('flex');
+    });
+    window.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dragDepth--;
+        if (dragDepth <= 0) {
+            dragDepth = 0;
+            dropOverlay.classList.add('hidden');
+            dropOverlay.classList.remove('flex');
+        }
+    });
+    window.addEventListener('dragover', (e) => e.preventDefault());
+    window.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dragDepth = 0;
+        dropOverlay.classList.add('hidden');
+        dropOverlay.classList.remove('flex');
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            for (let i = 0; i < e.dataTransfer.files.length; i++) {
+                const f = e.dataTransfer.files[i];
+                const n = f.name.toLowerCase();
+                if (n.endsWith('.mid') || n.endsWith('.midi')) {
+                    loadMidiFile(f);
+                    break;
+                }
+            }
+        }
+    });
+
+    playPauseBtn.addEventListener('click', () => {
+        if (clockState.playing) pauseSong();
+        else playSong();
+    });
+    restartBtn.addEventListener('click', restartSong);
+
+    window.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        if (e.code === 'Space') {
+            e.preventDefault();
+            if (!midiData.loaded) return;
+            if (clockState.playing) pauseSong();
+            else playSong();
+        } else if (e.code === 'ArrowLeft') {
+            e.preventDefault();
+            if (!midiData.loaded) return;
+            const nowSec = clockState.playing ? computeWallClockSec(performance.now()) : clockState.currentSec;
+            seekTo(nowSec - 1.0);
+            refreshTimeline();
+            refreshHud();
+        } else if (e.code === 'ArrowRight') {
+            e.preventDefault();
+            if (!midiData.loaded) return;
+            const nowSec = clockState.playing ? computeWallClockSec(performance.now()) : clockState.currentSec;
+            seekTo(nowSec + 1.0);
+            refreshTimeline();
+            refreshHud();
+        }
+    });
+
+    const seekContainer = document.getElementById('seek-container');
+    let isScrubbing = false;
+
+    function scrubFromX(clientX) {
+        if (!midiData.loaded || midiData.duration <= 0) return;
+        const rect = seekContainer.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        seekTo(ratio * midiData.duration);
+        refreshTimeline();
+    }
+
+    seekContainer.addEventListener('mousedown', (e) => {
+        isScrubbing = true;
+        scrubFromX(e.clientX);
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (isScrubbing) scrubFromX(e.clientX);
+    });
+    window.addEventListener('mouseup', () => { isScrubbing = false; });
+
+    seekContainer.addEventListener('touchstart', (e) => {
+        isScrubbing = true;
+        if (e.touches.length > 0) scrubFromX(e.touches[0].clientX);
+    }, { passive: true });
+    window.addEventListener('touchmove', (e) => {
+        if (isScrubbing && e.touches.length > 0) scrubFromX(e.touches[0].clientX);
+    }, { passive: true });
+    window.addEventListener('touchend', () => { isScrubbing = false; });
+
+    function pickKeyAt(clientX, clientY) {
+        const rect = pianoCanvas.getBoundingClientRect();
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        if (y < 0 || y > rect.height) return -1;
+
+        const blackH = rect.height * 0.62;
+        if (y <= blackH) {
+            for (let p = 0; p < 128; p++) {
+                if (!IS_BLACK_KEY[p]) continue;
+                if (x >= clockState.keyPxX[p] && x <= clockState.keyPxX[p] + clockState.keyPxW[p]) return p;
+            }
+        }
+        for (let p = 0; p < 128; p++) {
+            if (IS_BLACK_KEY[p]) continue;
+            if (x >= clockState.keyPxX[p] && x <= clockState.keyPxX[p] + clockState.keyPxW[p]) return p;
+        }
+        return -1;
+    }
+
+    let isPlayingKeys = false;
+    function triggerManualKey(clientX, clientY) {
+        const p = pickKeyAt(clientX, clientY);
+        if (p !== -1 && p !== clockState.pressedKey) {
+            clockState.pressedKey = p;
+            synth.ensureContext();
+            synth.beginFrame();
+            synth.playNote(p, 112, 0.35);
+        } else if (p === -1) {
+            clockState.pressedKey = -1;
+        }
+    }
+
+    pianoCanvas.addEventListener('mousedown', (e) => {
+        isPlayingKeys = true;
+        triggerManualKey(e.clientX, e.clientY);
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (isPlayingKeys) triggerManualKey(e.clientX, e.clientY);
+    });
+    window.addEventListener('mouseup', () => {
+        isPlayingKeys = false;
+        clockState.pressedKey = -1;
+    });
+
+    pianoCanvas.addEventListener('touchstart', (e) => {
+        isPlayingKeys = true;
+        if (e.touches.length > 0) triggerManualKey(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    pianoCanvas.addEventListener('touchmove', (e) => {
+        if (isPlayingKeys && e.touches.length > 0) triggerManualKey(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    window.addEventListener('touchend', () => {
+        isPlayingKeys = false;
+        clockState.pressedKey = -1;
+    });
+
+    const trackBtn = document.getElementById('track-toggle-btn');
+    const trackPanel = document.getElementById('track-panel');
+    const settingsBtn = document.getElementById('settings-toggle-btn');
+    const settingsPanel = document.getElementById('settings-panel');
+
+    trackBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        trackPanel.classList.toggle('hidden');
+        settingsPanel.classList.add('hidden');
+    });
+    document.getElementById('close-track-btn').addEventListener('click', () => {
+        trackPanel.classList.add('hidden');
+    });
+
+    settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        settingsPanel.classList.toggle('hidden');
+        trackPanel.classList.add('hidden');
+    });
+    document.getElementById('close-settings-btn').addEventListener('click', () => {
+        settingsPanel.classList.add('hidden');
+    });
+
+    window.addEventListener('click', (e) => {
+        if (!trackPanel.contains(e.target) && !trackBtn.contains(e.target)) {
+            trackPanel.classList.add('hidden');
+        }
+        if (!settingsPanel.contains(e.target) && !settingsBtn.contains(e.target)) {
+            settingsPanel.classList.add('hidden');
+        }
+    });
+
+    const audioToggleBtn = document.getElementById('audio-toggle-btn');
+    audioToggleBtn.addEventListener('click', () => {
+        synth.ensureContext();
+        const nextEnabled = !synth.enabled;
+        synth.setEnabled(nextEnabled);
+        if (nextEnabled) {
+            audioToggleBtn.textContent = 'AUDIO ON';
+            audioToggleBtn.className = 'px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold bg-[#a3e635]/15 text-[#a3e635] border border-[#a3e635]/40';
+        } else {
+            audioToggleBtn.textContent = 'MUTED';
+            audioToggleBtn.className = 'px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/40';
+        }
+    });
+
+    document.getElementById('waveform-select').addEventListener('change', (e) => {
+        synth.ensureContext();
+        synth.setWaveform(e.target.value);
+        notify(`Wave: ${e.target.value}`);
+    });
+
+    document.getElementById('fallspeed-slider').addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        clockState.fallTimeSec = v;
+        document.getElementById('fallspeed-val').textContent = v.toFixed(2) + 's';
+    });
+
+    document.getElementById('playspeed-slider').addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        if (clockState.playing) {
+            const now = performance.now();
+            clockState.anchorSongSec = computeWallClockSec(now);
+            clockState.anchorPerfMs = now;
+        }
+        clockState.playbackSpeed = v;
+        document.getElementById('playspeed-val').textContent = v.toFixed(2) + 'x';
+    });
+
+    document.getElementById('volume-slider').addEventListener('input', (e) => {
+        const v = parseInt(e.target.value, 10);
+        document.getElementById('volume-val').textContent = v + '%';
+        synth.setVolume(v / 100.0);
+    });
+
+    const polyphonyInput = document.getElementById('polyphony-input');
+    const polyphonyVal = document.getElementById('polyphony-val');
+
+    function applyCustomPolyphony() {
+        const raw = parseInt(polyphonyInput.value, 10);
+        const limit = Number.isFinite(raw) ? Math.max(1, Math.min(2048, raw)) : 1024;
+        polyphonyInput.value = limit;
+        polyphonyVal.textContent = limit;
+        synth.setMaxVoices(limit);
+        notify(`Max Voices set to ${limit}`);
+    }
+
+    document.getElementById('polyphony-apply-btn').addEventListener('click', applyCustomPolyphony);
+    polyphonyInput.addEventListener('change', applyCustomPolyphony);
+
+    const hudPanelEl = document.getElementById('hud-panel');
+    const hudSizeValEl = document.getElementById('hud-size-val');
+    let hudFontSize = 15;
+
+    function updateHudFontSize(nextSize) {
+        hudFontSize = Math.max(8, Math.min(28, nextSize));
+        hudPanelEl.style.fontSize = hudFontSize + 'px';
+        hudSizeValEl.textContent = hudFontSize + 'px';
+    }
+
+    document.getElementById('hud-size-dec').addEventListener('click', () => updateHudFontSize(hudFontSize - 1));
+    document.getElementById('hud-size-inc').addEventListener('click', () => updateHudFontSize(hudFontSize + 1));
+
+    window.onload = function() {
+        refreshHud();
+        refreshTimeline();
+        requestAnimationFrame(frameLoop);
+    };
+    </script>
+</body>
+</html>
